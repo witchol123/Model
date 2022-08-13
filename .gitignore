@@ -11,6 +11,8 @@ __pycache__/
 build/
 dataset/
 weights/
+VOCdevkit/
+my_yolo_dataset/
 runs/
 develop-eggs/
 dist/
