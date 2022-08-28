@@ -1,10 +1,9 @@
 import math
 from typing import List, Tuple, Dict, Optional
-
 import torch
+import torch.nn.functional
 from torch import nn, Tensor
 import torchvision
-
 from .image_list import ImageList
 
 
@@ -47,10 +46,10 @@ def _resize_image(image, self_min_size, self_max_size):
 
 class GeneralizedRCNNTransform(nn.Module):
     """
-    Performs input / target transformation before feeding the data to a GeneralizedRCNN
-    model.
+    Performs input / target transformation before feeding the data to a GeneralizedRCNN model.
+    此脚本的作用是把图像进行Normalize，并把图像和bounding_box进行Resize后打包成batch传入backbone
 
-    The transformations it perform are:
+    The transformations it performs are:
         - input normalization (mean subtraction and std division)
         - input / target resizing to match min_size / max_size
 
@@ -59,6 +58,7 @@ class GeneralizedRCNNTransform(nn.Module):
 
     def __init__(self, min_size, max_size, image_mean, image_std):
         super(GeneralizedRCNNTransform, self).__init__()
+        # 判断min_size是否为list或tuple类型，如果不是则转化为tuple类型
         if not isinstance(min_size, (list, tuple)):
             min_size = (min_size,)
         self.min_size = min_size      # 指定图像的最小边长范围
@@ -68,18 +68,21 @@ class GeneralizedRCNNTransform(nn.Module):
 
     def normalize(self, image):
         """标准化处理"""
+        # 获取传入image的数据类型和设备信息
         dtype, device = image.dtype, image.device
+        # 将均值和方差转换为tensor格式
         mean = torch.as_tensor(self.image_mean, dtype=dtype, device=device)
         std = torch.as_tensor(self.image_std, dtype=dtype, device=device)
+        # 标准化过程：(image - mean) / std
+        # 因为image的维度是3，所以要将一维的mean和std加上两个维度None变成三维后再进行计算
         # [:, None, None]: shape [3] -> [3, 1, 1]
         return (image - mean[:, None, None]) / std[:, None, None]
 
     def torch_choice(self, k):
         # type: (List[int]) -> int
         """
-        Implements `random.choice` via torch ops so it can be compiled with
-        TorchScript. Remove if https://github.com/pytorch/pytorch/issues/25803
-        is fixed.
+        Implements `random.choice` via torch ops, so it can be compiled with TorchScript.
+        Remove if https://github.com/pytorch/pytorch/issues/25803 is fixed.
         """
         index = int(torch.empty(1).uniform_(0., float(len(k))).item())
         return k[index]
@@ -87,34 +90,35 @@ class GeneralizedRCNNTransform(nn.Module):
     def resize(self, image, target):
         # type: (Tensor, Optional[Dict[str, Tensor]]) -> Tuple[Tensor, Optional[Dict[str, Tensor]]]
         """
-        将图片缩放到指定的大小范围内，并对应缩放bboxes信息
-        Args:
-            image: 输入的图片
-            target: 输入图片的相关信息（包括bboxes信息）
-
-        Returns:
-            image: 缩放后的图片
-            target: 缩放bboxes后的图片相关信息
+        将图片缩放到指定的大小范围内，并对应缩放 bboxes 信息
+        :param image:输入的图片
+        :param target:输入图片的相关信息（包括 bboxes 信息）
+        :return:image: 缩放后的图片，target: 缩放bboxes后的图片相关信息
         """
+
         # image shape is [channel, height, width]
         h, w = image.shape[-2:]
 
         if self.training:
-            size = float(self.torch_choice(self.min_size))  # 指定输入图片的最小边长,注意是self.min_size不是min_size
+            # 如果是训练集，则从self.min_size中随机取一个值
+            size = float(self.torch_choice(self.min_size))
         else:
+            # 如果是验证集，则从self.min_size中取最后一个值
             # FIXME assume for now that testing uses the largest scale
-            size = float(self.min_size[-1])    # 指定输入图片的最小边长,注意是self.min_size不是min_size
+            size = float(self.min_size[-1])
 
         if torchvision._is_tracing():
             image = _resize_image_onnx(image, size, float(self.max_size))
         else:
             image = _resize_image(image, size, float(self.max_size))
 
+        # target为空对应验证模式
         if target is None:
             return image, target
 
         bbox = target["boxes"]
         # 根据图像的缩放比例来缩放bbox
+        # [h, w]是缩放前的高度和宽度，image.shape[-2:]是缩放后的高度和宽度
         bbox = resize_boxes(bbox, [h, w], image.shape[-2:])
         target["boxes"] = bbox
 
@@ -147,6 +151,7 @@ class GeneralizedRCNNTransform(nn.Module):
 
     def max_by_axis(self, the_list):
         # type: (List[List[int]]) -> List[int]
+        # 第0维对应第一张image的shape
         maxes = the_list[0]
         for sublist in the_list[1:]:
             for index, item in enumerate(sublist):
@@ -157,12 +162,9 @@ class GeneralizedRCNNTransform(nn.Module):
         # type: (List[Tensor], int) -> Tensor
         """
         将一批图像打包成一个batch返回（注意batch中每个tensor的shape是相同的）
-        Args:
-            images: 输入的一批图片
-            size_divisible: 将图像高和宽调整到该数的整数倍
-
-        Returns:
-            batched_imgs: 打包成一个batch后的tensor数据
+        :param images: 输入的一批图片
+        :param size_divisible: 将图像高和宽调整到该数的整数倍
+        :return: batched_imgs: 打包成一个batch后的tensor数据
         """
 
         if torchvision._is_tracing():
@@ -200,15 +202,13 @@ class GeneralizedRCNNTransform(nn.Module):
                     ):
         # type: (...) -> List[Dict[str, Tensor]]
         """
-        对网络的预测结果进行后处理（主要将bboxes还原到原图像尺度上）
-        Args:
-            result: list(dict), 网络的预测结果, len(result) == batch_size
-            image_shapes: list(torch.Size), 图像预处理缩放后的尺寸, len(image_shapes) == batch_size
-            original_image_sizes: list(torch.Size), 图像的原始尺寸, len(original_image_sizes) == batch_size
-
-        Returns:
-
+        对网络的预测结果进行后处理（主要将 bboxes 还原到原图像尺度上）
+        :param result: list(dict), 网络的预测结果, len(result) == batch_size
+        :param image_shapes: list(torch.Size), 图像预处理缩放后的尺寸, len(image_shapes) == batch_size
+        :param original_image_sizes: list(torch.Size), 图像的原始尺寸, len(original_image_sizes) == batch_size
+        :return: 将 bboxes 还原到原图像尺度上
         """
+
         if self.training:
             return result
 
@@ -264,12 +264,14 @@ class GeneralizedRCNNTransform(nn.Module):
 def resize_boxes(boxes, original_size, new_size):
     # type: (Tensor, List[int], List[int]) -> Tensor
     """
-    将boxes参数根据图像的缩放情况进行相应缩放
-
-    Arguments:
-        original_size: 图像缩放前的尺寸
-        new_size: 图像缩放后的尺寸
+    将bounding_boxes参数根据图像的缩放情况进行相应缩放
+    :param boxes: bounding_boxes信息
+    :param original_size: 原始图像尺寸
+    :param new_size: 缩放后的图像尺寸
+    :return:
     """
+
+    # 缩放因子(ratios) = 新尺寸(new_size) / 旧尺寸(original_size)
     ratios = [
         torch.tensor(s, dtype=torch.float32, device=boxes.device) /
         torch.tensor(s_orig, dtype=torch.float32, device=boxes.device)
@@ -278,11 +280,13 @@ def resize_boxes(boxes, original_size, new_size):
     ratios_height, ratios_width = ratios
     # Removes a tensor dimension, boxes [minibatch, 4]
     # Returns a tuple of all slices along a given dimension, already without it.
+    # boxes.unbind(1)在boxes([minibatch, 4])索引为1(4)的维度展开
     xmin, ymin, xmax, ymax = boxes.unbind(1)
     xmin = xmin * ratios_width
     xmax = xmax * ratios_width
     ymin = ymin * ratios_height
     ymax = ymax * ratios_height
+    # 在boxes索引为1的维度合并
     return torch.stack((xmin, ymin, xmax, ymax), dim=1)
 
 
