@@ -1,15 +1,15 @@
 import os
 import datetime
-
 import torch
 import torchvision
-
 import transforms
 from network_files import FasterRCNN, AnchorsGenerator
-from backbone import MobileNetV2, vgg
+from backbone import MobileNetV2
 from my_dataset import VOCDataSet
 from train_utils import GroupedBatchSampler, create_aspect_ratio_groups
 from train_utils import train_eval_utils as utils
+import torch.utils.data
+# import torchvision.models.detection.faster_rcnn
 
 
 def create_model(num_classes):
@@ -50,14 +50,15 @@ def main():
         os.makedirs("save_weights")
 
     data_transform = {
+        # 图片进行随机水平翻转后，GT_box坐标也要进行随机水平翻转
         "train": transforms.Compose([transforms.ToTensor(),
                                      transforms.RandomHorizontalFlip(0.5)]),
         "val": transforms.Compose([transforms.ToTensor()])
     }
 
-    VOC_root = "./"  # VOCdevkit
+    VOC_root = "./VOC_root"  # VOCdevkit
     aspect_ratio_group_factor = 3
-    batch_size = 8
+    batch_size = 1
     amp = False  # 是否使用混合精度训练，需要GPU支持
 
     # check voc root
@@ -78,10 +79,12 @@ def main():
         # 每个batch图片从同一高宽比例区间中取
         train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, batch_size)
 
+    # 多线程
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
     print('Using %g dataloader workers' % nw)
 
-    # 注意这里的collate_fn是自定义的，因为读取的数据包括image和targets，不能直接使用默认的方法合成batch
+    # 注意这里的collate_fn是自定义的，因为读取的数据包括image和targets，不能直接使用默认的方法合成batch，
+    # 默认方法使用的是torch.stack()函数
     if train_sampler:
         # 如果按照图片高宽比采样图片，dataloader中需要使用batch_sampler
         train_data_loader = torch.utils.data.DataLoader(train_dataset,
@@ -119,10 +122,10 @@ def main():
     learning_rate = []
     val_map = []
 
-    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-    #  first frozen backbone and train 5 epochs                   #
-    #  首先冻结前置特征提取网络权重（backbone），训练rpn以及最终预测网络部分 #
-    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+    #  first frozen backbone and train 5 epochs                                       #
+    #  首先冻结前置特征提取网络权重（backbone）因为这部分权重已经预训练过，训练rpn以及最终预测网络部分  #
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
     for param in model.backbone.parameters():
         param.requires_grad = False
 
@@ -131,7 +134,7 @@ def main():
     optimizer = torch.optim.SGD(params, lr=0.005,
                                 momentum=0.9, weight_decay=0.0005)
 
-    init_epochs = 5
+    init_epochs = 2
     for epoch in range(init_epochs):
         # train for one epoch, printing every 10 iterations
         mean_loss, lr = utils.train_one_epoch(model, optimizer, train_data_loader,
@@ -154,9 +157,9 @@ def main():
 
     torch.save(model.state_dict(), "./save_weights/pretrain.pth")
 
-    # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-    #  second unfrozen backbone and train all network     #
-    #  解冻前置特征提取网络权重（backbone），接着训练整个网络权重  #
+    # # # # # # # # # # # # # # # # # # # # # # # # # # #  #
+    #  second unfrozen backbone and train all network      #
+    #  解冻前置特征提取网络权重（backbone），接着训练整个网络权重    #
     # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
     # 冻结backbone部分底层权重
@@ -172,10 +175,11 @@ def main():
     optimizer = torch.optim.SGD(params, lr=0.005,
                                 momentum=0.9, weight_decay=0.0005)
     # learning rate scheduler
+    # 每训练5步，学习率×0.33
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
                                                    step_size=3,
                                                    gamma=0.33)
-    num_epochs = 20
+    num_epochs = 2
     for epoch in range(init_epochs, num_epochs+init_epochs, 1):
         # train for one epoch, printing every 50 iterations
         mean_loss, lr = utils.train_one_epoch(model, optimizer, train_data_loader,
@@ -203,6 +207,7 @@ def main():
         # 仅保存最后5个epoch的权重
         if epoch in range(num_epochs+init_epochs)[-5:]:
             save_files = {
+                # 保存模型、优化器、学习率和epoch的参数
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'lr_scheduler': lr_scheduler.state_dict(),
