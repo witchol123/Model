@@ -1,10 +1,8 @@
 from typing import List, Optional, Dict, Tuple
-
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 import torchvision
-
 from . import det_utils
 from . import boxes as box_ops
 from .image_list import ImageList
@@ -30,11 +28,9 @@ class AnchorsGenerator(nn.Module):
 
     """
     anchors生成器
-    Module that generates anchors for a set of feature maps and
-    image sizes.
+    Module that generates anchors for a set of feature maps and image sizes.
 
-    The module support computing anchors at multiple sizes and aspect ratios
-    per feature map.
+    The module support computing anchors at multiple sizes and aspect ratios per feature map.
 
     sizes and aspect_ratios should have the same number of elements, and it should
     correspond to the number of feature maps.
@@ -49,8 +45,15 @@ class AnchorsGenerator(nn.Module):
     """
 
     def __init__(self, sizes=(128, 256, 512), aspect_ratios=(0.5, 1.0, 2.0)):
+        """
+        :param sizes: anchor 的大小
+        :param aspect_ratios: 每个 acchor 对应的比例
+        默认的 sizes 和 aspect_ratios 没用上
+        """
+
         super(AnchorsGenerator, self).__init__()
 
+        # 判断sizes和aspect_ratios中的元素是否为list或tuple
         if not isinstance(sizes[0], (list, tuple)):
             # TODO change this
             sizes = tuple((s,) for s in sizes)
@@ -62,18 +65,20 @@ class AnchorsGenerator(nn.Module):
         self.sizes = sizes
         self.aspect_ratios = aspect_ratios
         self.cell_anchors = None
+        # self._cache用于存储所有anchors的坐标信息
         self._cache = {}
 
     def generate_anchors(self, scales, aspect_ratios, dtype=torch.float32, device=torch.device("cpu")):
         # type: (List[int], List[float], torch.dtype, torch.device) -> Tensor
         """
         compute anchor sizes
-        Arguments:
-            scales: sqrt(anchor_area)
-            aspect_ratios: h/w ratios
-            dtype: float32
-            device: cpu/gpu
+        :param scales: sqrt(anchor_area)
+        :param aspect_ratios: h/w ratios
+        :param dtype: float32
+        :param device: cpu/gpu
+        :return:
         """
+
         scales = torch.as_tensor(scales, dtype=dtype, device=device)
         aspect_ratios = torch.as_tensor(aspect_ratios, dtype=dtype, device=device)
         h_ratios = torch.sqrt(aspect_ratios)
@@ -81,6 +86,7 @@ class AnchorsGenerator(nn.Module):
 
         # [r1, r2, r3]' * [s1, s2, s3]
         # number of elements is len(ratios)*len(scales)
+        # ws和hs分别是anchor的宽度和高度
         ws = (w_ratios[:, None] * scales[None, :]).view(-1)
         hs = (h_ratios[:, None] * scales[None, :]).view(-1)
 
@@ -119,10 +125,11 @@ class AnchorsGenerator(nn.Module):
         """
         anchors position in grid coordinate axis map into origin image
         计算预测特征图对应原始图像上的所有anchors的坐标
-        Args:
-            grid_sizes: 预测特征矩阵的height和width
-            strides: 预测特征矩阵上一步对应原始图像上的步距
+        :param grid_sizes: 预测特征矩阵的 height 和 width
+        :param strides: 预测特征矩阵上一步对应原始图像上的步距
+        :return:
         """
+
         anchors = []
         cell_anchors = self.cell_anchors
         assert cell_anchors is not None
@@ -182,6 +189,7 @@ class AnchorsGenerator(nn.Module):
 
         # one step in feature map equate n pixel stride in origin image
         # 计算特征层上的一步等于原始图像上的步长
+        # strides = [原始图像的高 / 特征图的高, 原始图像的宽 / 特征图的宽]
         strides = [[torch.tensor(image_size[0] // g[0], dtype=torch.int64, device=device),
                     torch.tensor(image_size[1] // g[1], dtype=torch.int64, device=device)] for g in grid_sizes]
 
@@ -210,7 +218,7 @@ class AnchorsGenerator(nn.Module):
 
 class RPNHead(nn.Module):
     """
-    add a RPN head with classification and regression
+    add an RPN head with classification and regression
     通过滑动窗口计算预测目标概率与bbox regression参数
 
     Arguments:
@@ -227,6 +235,7 @@ class RPNHead(nn.Module):
         # 计算预测的目标bbox regression参数
         self.bbox_pred = nn.Conv2d(in_channels, num_anchors * 4, kernel_size=1, stride=1)
 
+        # 对以上三个卷积层进行参数的初始化
         for layer in self.children():
             if isinstance(layer, nn.Conv2d):
                 torch.nn.init.normal_(layer.weight, std=0.01)
@@ -234,6 +243,11 @@ class RPNHead(nn.Module):
 
     def forward(self, x):
         # type: (List[Tensor]) -> Tuple[List[Tensor], List[Tensor]]
+        """
+        :param x: 通过 backbone 生成的预测特征层
+        :return:
+        """
+
         logits = []
         bbox_reg = []
         for i, feature in enumerate(x):
@@ -386,19 +400,20 @@ class RegionProposalNetwork(torch.nn.Module):
         # type: (List[Tensor], List[Dict[str, Tensor]]) -> Tuple[List[Tensor], List[Tensor]]
         """
         计算每个anchors最匹配的gt，并划分为正样本，背景以及废弃的样本
-        Args：
-            anchors: (List[Tensor])
-            targets: (List[Dict[Tensor])
-        Returns:
-            labels: 标记anchors归属类别（1, 0, -1分别对应正样本，背景，废弃的样本）
-                    注意，在RPN中只有前景和背景，所有正样本的类别都是1，0代表背景
-            matched_gt_boxes：与anchors匹配的gt
+        :param anchors: (List[Tensor])
+        :param targets: (List[Dict[Tensor])
+        :return: labels: 标记anchors归属类别（1, 0, -1分别对应正样本，背景，废弃的样本）
+                         注意，在RPN中只有前景和背景，所有正样本的类别都是1，0代表背景
+                 matched_gt_boxes：与anchors匹配的gt
         """
+
         labels = []
         matched_gt_boxes = []
         # 遍历每张图像的anchors和targets
         for anchors_per_image, targets_per_image in zip(anchors, targets):
+            # 只需要boxes即可
             gt_boxes = targets_per_image["boxes"]
+            # gt_boxes.numel返回gt_boxes中元素的个数
             if gt_boxes.numel() == 0:
                 device = anchors_per_image.device
                 matched_gt_boxes_per_image = torch.zeros(anchors_per_image.shape, dtype=torch.float32, device=device)
@@ -479,10 +494,11 @@ class RegionProposalNetwork(torch.nn.Module):
         device = proposals.device
 
         # do not backprop throught objectness
+        # detach后丢弃梯度信息，只获取数值信息
         objectness = objectness.detach()
         objectness = objectness.reshape(num_images, -1)
 
-        # Returns a tensor of size size filled with fill_value
+        # Returns a tensor of size, the size filled with fill_value
         # levels负责记录分隔不同预测特征层上的anchors索引信息
         levels = [torch.full((n, ), idx, dtype=torch.int64, device=device)
                   for idx, n in enumerate(num_anchors_per_level)]

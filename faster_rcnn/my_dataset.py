@@ -1,4 +1,3 @@
-import numpy as np
 from torch.utils.data import Dataset
 import os
 import torch
@@ -8,7 +7,7 @@ from lxml import etree
 
 
 class VOCDataSet(Dataset):
-    """读取解析PASCAL VOC2007/2012数据集"""
+    """读取解析 PASCAL VOC2007/2012 数据集"""
 
     def __init__(self, voc_root, year="2012", transforms=None, txt_name: str = "train.txt"):
         assert year in ["2007", "2012"], "year must be in ['2007', '2012']"
@@ -25,6 +24,8 @@ class VOCDataSet(Dataset):
         assert os.path.exists(txt_path), "not found {} file.".format(txt_name)
 
         with open(txt_path) as read:
+            # line.strip()是因为每一行末尾都有一个"\n"换行符
+            # 最后再加一个".xml"后缀名
             xml_list = [os.path.join(self.annotations_root, line.strip() + ".xml")
                         for line in read.readlines() if len(line.strip()) > 0]
 
@@ -36,6 +37,7 @@ class VOCDataSet(Dataset):
                 continue
 
             # check for targets
+            # 传入一个xml文件，经过该方法etree.fromstring()后变成一个Element对象
             with open(xml_path) as fid:
                 xml_str = fid.read()
             xml = etree.fromstring(xml_str)
@@ -57,9 +59,11 @@ class VOCDataSet(Dataset):
         self.transforms = transforms
 
     def __len__(self):
+        # 统计对象个数
         return len(self.xml_list)
 
     def __getitem__(self, idx):
+        """ 传入索引值 idx，返回 idx 对应的图片以及图片信息"""
         # read xml
         xml_path = self.xml_list[idx]
         with open(xml_path) as fid:
@@ -73,6 +77,7 @@ class VOCDataSet(Dataset):
 
         boxes = []
         labels = []
+        # iscrowd是否难检测
         iscrowd = []
         assert "object" in data, "{} lack of object information.".format(xml_path)
         for obj in data["object"]:
@@ -98,14 +103,10 @@ class VOCDataSet(Dataset):
         labels = torch.as_tensor(labels, dtype=torch.int64)
         iscrowd = torch.as_tensor(iscrowd, dtype=torch.int64)
         image_id = torch.tensor([idx])
+        # (ymax - ymin) * (xmax - xmin)
         area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
 
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["image_id"] = image_id
-        target["area"] = area
-        target["iscrowd"] = iscrowd
+        target = {"boxes": boxes, "labels": labels, "image_id": image_id, "area": area, "iscrowd": iscrowd}
 
         if self.transforms is not None:
             image, target = self.transforms(image, target)
@@ -113,6 +114,8 @@ class VOCDataSet(Dataset):
         return image, target
 
     def get_height_and_width(self, idx):
+        # 获取图像高度和宽度的方法，多GPU训练时才会用到此方法
+        # 如果不使用此方法，函数会遍历所有的数据集并计算高和宽，这样是很费时的
         # read xml
         xml_path = self.xml_list[idx]
         with open(xml_path) as fid:
@@ -186,12 +189,7 @@ class VOCDataSet(Dataset):
         image_id = torch.tensor([idx])
         area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
 
-        target = {}
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["image_id"] = image_id
-        target["area"] = area
-        target["iscrowd"] = iscrowd
+        target = {"boxes": boxes, "labels": labels, "image_id": image_id, "area": area, "iscrowd": iscrowd}
 
         return (data_height, data_width), target
 
@@ -206,7 +204,8 @@ class VOCDataSet(Dataset):
 # import matplotlib.pyplot as plt
 # import torchvision.transforms as ts
 # import random
-#
+# import numpy as np
+
 # # read class_indict
 # category_index = {}
 # try:
@@ -224,7 +223,7 @@ class VOCDataSet(Dataset):
 # }
 #
 # # load train data set
-# train_data_set = VOCDataSet(os.getcwd(), "2012", data_transform["train"], "train.txt")
+# train_data_set = VOCDataSet("./VOC_root/VOCdevkit", "2012", data_transform["train"], "train.txt")
 # print(len(train_data_set))
 # for index in random.sample(range(0, len(train_data_set)), k=5):
 #     img, target = train_data_set[index]

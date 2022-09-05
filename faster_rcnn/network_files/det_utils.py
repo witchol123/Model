@@ -326,7 +326,7 @@ class Matcher(object):
         # Max over gt elements (dim 0) to find best gt candidate for each prediction
         # M x N 的每一列代表一个anchors与所有gt的匹配iou值
         # matched_vals代表每列的最大值，即每个anchors与所有gt匹配的最大iou值
-        # matches对应最大值所在的索引
+        # matches对应最大值及其所在的索引
         matched_vals, matches = match_quality_matrix.max(dim=0)  # the dimension to reduce.
         if self.allow_low_quality_matches:
             all_matches = matches.clone()

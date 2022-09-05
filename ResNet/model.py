@@ -3,9 +3,17 @@ from torch import nn
 
 
 class BasicBlock(nn.Module):
+    """18 和 34 层所对应的残差结构"""
+    # expansion用来指示残差结构主分支上卷积核的个数是否发生了变化
     expansion = 1
 
-    def __init__(self, in_channel, out_channel, stride=1, downsample=None, **kwargs):
+    def __init__(self, in_channel, out_channel, stride=1, downsample=None):
+        """
+        :param in_channel: 输入特征矩阵的深度
+        :param out_channel: 输出特征矩阵的深度，即主分支上卷积核的个数
+        :param stride: 步距默认为 1
+        :param downsample: 下采样，对应 conv3_x、conv4_x 和 conv3_x 第一层卷积层 shortcut 中的 1*1 卷积层
+        """
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=in_channel, out_channels=out_channel,
                                kernel_size=3, stride=stride, padding=1, bias=False)
@@ -18,6 +26,7 @@ class BasicBlock(nn.Module):
         self.downsample = downsample
 
     def forward(self, x):
+        # identity是shortcut分支上的输出
         identity = x
         if self.downsample is not None:
             identity = self.downsample(x)
@@ -36,10 +45,10 @@ class BasicBlock(nn.Module):
 
 
 class Bottleneck(nn.Module):
+    """50、101 和 152 层所对应的残差结构"""
     expansion = 4
 
-    def __init__(self, in_channel, out_channel, stride=1,
-                 downsample=None, groups=1, with_per_group=64):
+    def __init__(self, in_channel, out_channel, stride=1, downsample=None, groups=1, with_per_group=64):
         super(Bottleneck, self).__init__()
         width = int(out_channel * (with_per_group / 64.)) * groups
 
@@ -78,8 +87,15 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, block_num, num_classes=1000,
-                 include_top=True, groups=1, with_per_group=64):
+    def __init__(self, block, block_num, num_classes=1000, include_top=True, groups=1, with_per_group=64):
+        """
+        :param block: BasicBlock or Bottleneck
+        :param block_num: list[] the number of residual blocks
+        :param num_classes: 训练集分类个数
+        :param include_top: 方便在 ResNet 网络的基础上搭建更加复杂的网络
+        :param groups:
+        :param with_per_group:
+        """
         super(ResNet, self).__init__()
 
         self.include_top = include_top
@@ -88,12 +104,12 @@ class ResNet(nn.Module):
         self.groups = groups
         self.with_per_group = with_per_group
 
-        self.conv1 = nn.Conv2d(3, self.in_channel, kernel_size=7,
-                               stride=2, padding=3, bias=False)
+        self.conv1 = nn.Conv2d(3, self.in_channel, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(self.in_channel)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
+        # residual blocks
         self.layer1 = self._make_layer(block, 64, block_num[0])
         self.layer2 = self._make_layer(block, 128, block_num[1], stride=2)
         self.layer3 = self._make_layer(block, 256, block_num[2], stride=2)
@@ -101,7 +117,7 @@ class ResNet(nn.Module):
 
         if self.include_top:
             self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-            self.fc = nn.Linear(512*block.expansion, num_classes)
+            self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         # 卷积层初始化
         for m in self.modules():
@@ -109,21 +125,28 @@ class ResNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
 
     def _make_layer(self, block, channel, block_num, stride=1):
+        """
+        :param block: BasicBlock or Bottleneck
+        :param channel: 残差结构中卷积层（第一层）所使用的卷积核个数
+        :param block_num: 残差结构的数量
+        :param stride: 步距默认为 1
+        :return:
+        """
         downsample = None
         if stride != 1 or self.in_channel != channel * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.in_channel, channel*block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(channel*block.expansion))
+                # 只调整channel
+                nn.Conv2d(self.in_channel, channel * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(channel * block.expansion))
 
-        layers = []
-        layers.append(block(self.in_channel, channel, downsample=downsample, stride=stride))
+        # 将第一层残差结构添加进layers中
+        layers = [block(self.in_channel, channel, downsample=downsample, stride=stride)]
         self.in_channel = channel * block.expansion
 
         for _ in range(1, block_num):
-            layers.append(block(self.in_channel, channel,
-                                groups=self.groups, with_per_group=self.with_per_group))
+            layers.append(block(self.in_channel, channel, groups=self.groups, with_per_group=self.with_per_group))
 
+        # 将list列表（layers）转化为非关键字参数的形式传入
         return nn.Sequential(*layers)
 
     def forward(self, x):

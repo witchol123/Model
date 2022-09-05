@@ -201,7 +201,7 @@ class RoIHeads(torch.nn.Module):
         list元素个数为batch_size
         Args:
             proposals: rpn预测的boxes
-            targets:
+            targets:人工标注的 gtbox 及其 label
 
         Returns:
 
@@ -215,12 +215,12 @@ class RoIHeads(torch.nn.Module):
         dtype = proposals[0].dtype
         device = proposals[0].device
 
-        # 获取标注好的boxes以及labels信息
+        # 获取标注好的gtboxes以及labels信息
         gt_boxes = [t["boxes"].to(dtype) for t in targets]
         gt_labels = [t["labels"] for t in targets]
 
         # append ground-truth bboxes to proposal
-        # 将gt_boxes拼接到proposal后面
+        # 将gt_boxes拼接到proposal后面（因为正样本太少了，就把gt_boxes也当成正样本）
         proposals = self.add_gt_proposals(proposals, gt_boxes)
 
         # get matching gt indices for each proposal

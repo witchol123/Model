@@ -48,6 +48,8 @@ class FasterRCNNBase(nn.Module):
         Arguments:
             images (list[Tensor]): images to be processed
             targets (list[Dict[Tensor]]): ground-truth boxes present in the image (optional)
+            这里的 images 和 targets 是 my_dataset.py 脚本中的 get_item 函数返回的 image 和 target
+            经过 train 函数的 data_loader 打包后的结果
 
         Returns:
             result (list[BoxList] or dict[Tensor]): the output from the model.
@@ -56,15 +58,19 @@ class FasterRCNNBase(nn.Module):
                 like `scores`, `labels` and `mask` (for Mask R-CNN models).
 
         """
+        # 训练模式时，targets不能为空
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
 
+        # 判断是否为训练模式
         if self.training:
             assert targets is not None
             for target in targets:         # 进一步判断传入的target的boxes参数是否符合规定
                 boxes = target["boxes"]
                 if isinstance(boxes, torch.Tensor):
                     if len(boxes.shape) != 2 or boxes.shape[-1] != 4:
+                        # 2指的是[N, 4]两个维度，4指的是[N, 4]中的4(左上角和右下角的x、y坐标)
+                        # N指的是图像中有几个目标，有几个目标就有几个边界框，每个边界框包含4个元素
                         raise ValueError("Expected target boxes to be a tensor"
                                          "of shape [N, 4], got {:}.".format(
                                           boxes.shape))
@@ -74,8 +80,10 @@ class FasterRCNNBase(nn.Module):
 
         original_image_sizes = torch.jit.annotate(List[Tuple[int, int]], [])
         for img in images:
+            # -2代表取后两个维度hight和width [channel, hight, width]
             val = img.shape[-2:]
-            assert len(val) == 2  # 防止输入的是个一维向量
+            assert len(val) == 2  # 防止输入的是个一维向量(即使输入的是一个一维向量，上面的取-2也不会报错，所以要assert一下)
+            # val[0]和val[1]分别对应该高度和宽度，此语句的作用是记录原始图像的size
             original_image_sizes.append((val[0], val[1]))
         # original_image_sizes = [img.shape[-2:] for img in images]
 

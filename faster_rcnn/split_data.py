@@ -3,15 +3,21 @@ import random
 
 
 def main():
+    """生成 train.txt 和 val.txt """
     random.seed(0)  # 设置随机种子，保证随机结果可复现
 
-    files_path = "./VOCdevkit/VOC2012/Annotations"
+    files_path = "./VOC_root/VOCdevkit/VOC2012/Annotations"
     assert os.path.exists(files_path), "path: '{}' does not exist.".format(files_path)
 
+    # 验证集比例
     val_rate = 0.5
 
+    # os.listdir(files_path)将files_path路径下的所有文件名以列表形式打印出来
+    # file.split(".")[0]通过"."将文件分给为文件名+文件类型，这里我们只取文件名[0]
+    # 最后使用sorted函数对列表files_name进行排序
     files_name = sorted([file.split(".")[0] for file in os.listdir(files_path)])
     files_num = len(files_name)
+    # k是采样个数，随机采样(random.sample)的范围是0-files_num
     val_index = random.sample(range(0, files_num), k=int(files_num*val_rate))
     train_files = []
     val_files = []
